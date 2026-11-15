@@ -1,0 +1,272 @@
+#include <LiquidCrystal.h>
+
+// LCD 20x4
+// RS, E, D4, D5, D6, D7
+LiquidCrystal lcd(8, 9, 10, 11, 12, 13);
+
+// ===== Pinos =====
+const uint8_t PIN_BOIA_CISTERNA_CHEIA = A0;
+const uint8_t PIN_BOIA_CISTERNA       = A1;
+const uint8_t PIN_BOIA_CAIXA          = A2;
+
+const uint8_t PIN_BOMBA               = 3;
+const uint8_t PIN_LED_CHEIA           = 4;
+const uint8_t PIN_LED_VERMELHO        = 5;
+
+const uint8_t PIN_BUZZER              = 6;
+const uint8_t PIN_RESET               = 7;
+
+// ===== Índices =====
+const uint8_t CHEIA    = 0;
+const uint8_t CISTERNA = 1;
+const uint8_t CAIXA    = 2;
+
+const uint8_t pinos[3] = {
+  PIN_BOIA_CISTERNA_CHEIA,
+  PIN_BOIA_CISTERNA,
+  PIN_BOIA_CAIXA
+};
+
+// ===== Debounce =====
+const unsigned long TEMPO_ESTAVEL_MS = 300;
+
+int estado[3];
+int ultimaLeitura[3];
+unsigned long ultimaMudanca[3];
+
+// ===== Alarme =====
+bool alarmeAtivo = false;
+bool alarmeSilenciado = false;
+bool tomAlto = false;
+
+unsigned long ultimoTom = 0;
+
+// ========================================================
+
+void atualiza(uint8_t i)
+{
+  int leitura = digitalRead(pinos[i]);
+
+  if (leitura != ultimaLeitura[i])
+  {
+    ultimaLeitura[i] = leitura;
+    ultimaMudanca[i] = millis();
+  }
+
+  if (millis() - ultimaMudanca[i] >= TEMPO_ESTAVEL_MS)
+  {
+    estado[i] = leitura;
+  }
+}
+
+// ========================================================
+
+void setup()
+{
+  for (uint8_t i = 0; i < 3; i++)
+  {
+    pinMode(pinos[i], INPUT_PULLUP);
+
+    estado[i] = digitalRead(pinos[i]);
+    ultimaLeitura[i] = estado[i];
+    ultimaMudanca[i] = millis();
+  }
+
+  pinMode(PIN_BOMBA, OUTPUT);
+  pinMode(PIN_LED_CHEIA, OUTPUT);
+  pinMode(PIN_LED_VERMELHO, OUTPUT);
+
+  pinMode(PIN_BUZZER, OUTPUT);
+  pinMode(PIN_RESET, INPUT_PULLUP);
+
+  digitalWrite(PIN_BOMBA, LOW);
+  digitalWrite(PIN_LED_CHEIA, LOW);
+  digitalWrite(PIN_LED_VERMELHO, HIGH);
+
+  // LCD 20x4
+  lcd.begin(20, 4);
+
+  lcd.setCursor(0, 0);
+  lcd.print("CONTROLE DE AGUA");
+
+  lcd.setCursor(0, 1);
+  lcd.print("INICIALIZANDO...");
+
+  delay(2000);
+
+  lcd.clear();
+}
+
+// ========================================================
+
+void loop()
+{
+  // Atualiza boias
+  for (uint8_t i = 0; i < 3; i++)
+  {
+    atualiza(i);
+  }
+
+  // ======================================================
+  // Estados
+  // ======================================================
+
+  bool cisternaVazia =
+      (estado[CHEIA] == LOW) &&
+      (estado[CISTERNA] == LOW);
+
+  bool caixaVazia =
+      (estado[CAIXA] == LOW);
+
+  bool faltaAguaTotal =
+      cisternaVazia && caixaVazia;
+
+  // ======================================================
+  // Alarme
+  // ======================================================
+
+  if (faltaAguaTotal && !alarmeSilenciado)
+  {
+    alarmeAtivo = true;
+  }
+
+  // Reseta automaticamente quando voltar água
+  if (!faltaAguaTotal)
+  {
+    alarmeAtivo = false;
+    alarmeSilenciado = false;
+
+    noTone(PIN_BUZZER);
+  }
+
+  // Botão reset
+  if (digitalRead(PIN_RESET) == LOW)
+  {
+    alarmeAtivo = false;
+    alarmeSilenciado = true;
+
+    noTone(PIN_BUZZER);
+
+    delay(300);
+  }
+
+  // ======================================================
+  // LED Cisterna Cheia
+  // ======================================================
+
+  digitalWrite(
+    PIN_LED_CHEIA,
+    estado[CHEIA] == HIGH ? HIGH : LOW
+  );
+
+  // ======================================================
+  // Bomba
+  // ======================================================
+
+  bool ligaBomba =
+      (estado[CISTERNA] == HIGH) &&
+      (estado[CAIXA] == LOW);
+
+  digitalWrite(
+    PIN_BOMBA,
+    ligaBomba ? HIGH : LOW
+  );
+
+  // ======================================================
+  // Buzzer + LED Vermelho
+  // ======================================================
+
+  if (alarmeAtivo)
+  {
+    if (millis() - ultimoTom > 300)
+    {
+      ultimoTom = millis();
+
+      tomAlto = !tomAlto;
+
+      if (tomAlto)
+      {
+        tone(PIN_BUZZER, 1800);
+        digitalWrite(PIN_LED_VERMELHO, HIGH);
+      }
+      else
+      {
+        tone(PIN_BUZZER, 1000);
+        digitalWrite(PIN_LED_VERMELHO, LOW);
+      }
+    }
+  }
+  else
+  {
+    noTone(PIN_BUZZER);
+
+    digitalWrite(
+      PIN_LED_VERMELHO,
+      ligaBomba ? LOW : HIGH
+    );
+  }
+
+  // ======================================================
+  // LCD 20x4
+  // ======================================================
+
+  // Linha 1
+  lcd.setCursor(0, 0);
+
+  if (alarmeAtivo)
+  {
+    lcd.print("*** ALARME ***    ");
+  }
+  else if (ligaBomba)
+  {
+    lcd.print("BOMBA: LIGADA     ");
+  }
+  else
+  {
+    lcd.print("BOMBA: DESLIGADA  ");
+  }
+
+  // Linha 2 - Cisterna
+  lcd.setCursor(0, 1);
+
+  if (estado[CHEIA] == HIGH)
+  {
+    lcd.print("CISTERNA: CHEIA   ");
+  }
+  else if (estado[CISTERNA] == HIGH)
+  {
+    lcd.print("CISTERNA: NIVEL OK");
+  }
+  else
+  {
+    lcd.print("CISTERNA: VAZIA   ");
+  }
+
+  // Linha 3 - Caixa
+  lcd.setCursor(0, 2);
+
+  if (estado[CAIXA] == HIGH)
+  {
+    lcd.print("CAIXA: CHEIA      ");
+  }
+  else
+  {
+    lcd.print("CAIXA: BAIXA      ");
+  }
+
+  // Linha 4 - Status
+  lcd.setCursor(0, 3);
+
+  if (alarmeAtivo)
+  {
+    lcd.print("ABASTECER AGUA    ");
+  }
+  else if (ligaBomba)
+  {
+    lcd.print("TRANSFERINDO AGUA ");
+  }
+  else
+  {
+    lcd.print("SISTEMA NORMAL    ");
+  }
+}
